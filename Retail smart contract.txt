@@ -1,0 +1,195 @@
+//------------------------------------------------------------------------------------//
+// This contract was designed by LIU Ziyang as a course project.                      //
+// It is designed for retail condition with assumption that all users are honest.     //
+
+pragma solidity ^0.8.0; // Specify the Solidity compiler version
+
+// Import the IERC20 standard interface from OpenZeppelin library
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";  
+
+// Define the Retail contract
+contract Retail {
+    IERC20 private _token;  // Declare a variable to interact with the ERC20 token
+    uint256 public sellerRequiredDeposit;  // Declare a variable to store the required seller deposit amount
+    address public seller;  // seller address
+    uint256 public nextProductId;   // Declare Product ID
+    uint256 public nextTransactionId;   // Declare transaction ID in order for reviewing
+
+    mapping(address => Buyer) public buyers;
+    mapping(uint256 => Product) public products;
+    mapping(uint256 => Transaction) public transactions;
+
+    // Declare mappings for buyer profiles, products, and transactions
+    // used for storing the info
+    struct Buyer {
+        string name;
+        string email;
+        string shippingAddress;
+    }
+
+    // Declare profuct info
+    struct Product {
+        string name;
+        uint256 price;
+        uint256 totalAmount;
+        uint256 totalRating;
+        uint256 ratingCount;
+    }
+
+    // Declare transaction info
+    struct Transaction {
+        address buyer;
+        uint256[] productIds;
+        uint256[] quantities;
+        uint256 totalCost;
+        bool completed;
+        bool returnApproved;
+    }
+
+    // Define a modifier type to restrict actions to the seller
+    // only seller can act in this condition, if msg.sender is not seller, the error info will appear
+    modifier onlySeller() {
+        require(msg.sender == seller, "Only available to seller");
+        _;
+    }
+
+    // Define a modifier to check buyer
+    modifier onlyBuyer(address buyerAddress) {
+        // Check if the shipping address is none or not
+	  // If the address is empty, means the current account is seller
+        require(keccak256(bytes(buyers[buyerAddress].shippingAddress)) != keccak256(""), "Only available to buyer");
+        _;
+    }
+
+    // Initialize the deploying contract address and the seller deposit amount
+    // It means the threshold of seller, make the contract more secure
+    constructor(address contrAddress, uint256 _sellerRequiredDeposit) {
+        _token = IERC20(contrAddress);
+        sellerRequiredDeposit = _sellerRequiredDeposit;
+    }
+
+    // Function for buyer registing
+    function buyerRegist(string memory name, string memory email, string memory shippingAddress) public {
+	  // Check whether the address is none
+        require(keccak256(bytes(buyers[msg.sender].shippingAddress)) != keccak256(""), "Already a profile in current address"); 
+        require(msg.sender != seller, "Seller address cannot be a buyer");
+        buyers[msg.sender] = Buyer(name, email, shippingAddress);
+    }
+
+    //-------------BONUS FEATURE--------------------//
+    // Function for buyer profile update
+    function buyerUpdate(string memory name, string memory email, string memory shippingAddress) public onlyBuyer(msg.sender) {
+        buyers[msg.sender].name = name;
+        buyers[msg.sender].email = email;
+        buyers[msg.sender].shippingAddress = shippingAddress;
+    }
+
+    // Function for seller registing
+    function sellerRegister(string memory name, string memory email) public {
+        require(seller == address(0), "Only one seller allowed");
+
+        // Check the seller balance, it should be bigger than the required deposit
+        require(_token.balanceOf(msg.sender) >= sellerRequiredDeposit, "Insufficient balance for seller deposit");   
+
+        _token.transferFrom(msg.sender, address(this), sellerRequiredDeposit);
+        seller = msg.sender;
+        buyers[msg.sender] = Buyer(name, email, "");
+    }
+
+    // Function for adding product
+    function addProduct(string memory name, uint256 price, uint256 totalAmount) public onlySeller {
+        products[nextProductId] = Product(name, price, totalAmount, 0, 0);
+        nextProductId++;
+    }
+
+    // Function to get product info using product ID
+    function getProduct(uint256 productId) public view returns (Product memory) {
+        return products[productId];
+    }
+
+    // Function to initiate a transaction with product IDs and quantities
+    function iniTxs(uint256[] memory productIds, uint256[] memory quantities) public onlyBuyer(msg.sender) {
+        require(productIds.length == quantities.length, "Product IDs and quantities length mismatch");
+
+        uint256 totalCost = 0; // Start from 0
+
+        // Calculate the total cost and update the totalAmount
+        for (uint256 i = 0; i < productIds.length; i++) {
+            uint256 productId = productIds[i];
+            uint256 quantity = quantities[i];
+
+            require(products[productId].totalAmount >= quantity, "Insufficient totalAmount"); // Check whether sufficient quantity
+
+            uint256 cost = products[productId].price * quantity;    // One time cost
+            totalCost += cost; // Total cost
+            products[productId].totalAmount -= quantity;
+        }
+
+        require(_token.balanceOf(msg.sender) >= totalCost, "Insufficient balance for transaction"); // Check whether sufficient balance
+        
+        // Transfer the total cost from the buyer to the contract
+        _token.transferFrom(msg.sender, address(this), totalCost);
+
+        // Store the transaction info
+        transactions[nextTransactionId] = Transaction(msg.sender, productIds, quantities, totalCost, false, false); 
+        nextTransactionId++;
+    }
+
+    // Function to view transaction info based on transaction ID
+    function viewTxs(uint256 transactionId) public view returns (Transaction memory) {
+        require(msg.sender == transactions[transactionId].buyer || msg.sender == seller, "Unauthorized access"); // Check whether authorized
+        return transactions[transactionId];
+    }
+
+    //----------------BONUS FEATURE---------------//
+    // Function to rate a product
+    function rateProduct(uint256 productId, uint256 rating) public onlyBuyer(msg.sender) {
+        require(rating >= 0 && rating <= 5, "Rating from 0 ~ 5"); // rating from 0-5
+        products[productId].totalRating += rating; // Update rating info to product profile
+        products[productId].ratingCount++;
+    }
+
+    // Function to get the average product rating
+    function getProductRating(uint256 productId) public view returns (uint256) {
+        if (products[productId].ratingCount == 0) {     // Zero rating
+            return 0;
+        }
+        return products[productId].totalRating / products[productId].ratingCount; // Calculate avg rate of required product ID
+    }
+
+    // Function for return request for Buyer
+    function requestReturn(uint256 transactionId) public onlyBuyer(msg.sender) {
+        require(!transactions[transactionId].completed, "Cannot request return for a completed transaction"); // Check Tx's state
+        transactions[transactionId].returnApproved = true;  // Approve return
+    }
+
+    // Function for return approve for Seller
+    function approveReturn(uint256 transactionId) public onlySeller {
+        // Check Tx's state and retuen request from buyer
+        require(!transactions[transactionId].completed, "Cannot approve return for a completed transaction");
+        require(transactions[transactionId].returnApproved, "Return not requested");
+
+        // Return the money
+        _token.transfer(transactions[transactionId].buyer, transactions[transactionId].totalCost);
+
+        // Update the product totalAmount
+        for (uint256 i = 0; i < transactions[transactionId].productIds.length; i++) {
+            uint256 productId = transactions[transactionId].productIds[i];
+            uint256 quantity = transactions[transactionId].quantities[i];
+            products[productId].totalAmount += quantity;
+        }
+
+        delete transactions[transactionId];  // Deleate the Tx as it makes no income
+    }
+
+    // Function for Tx's state check
+    function completeTxs(uint256 transactionId) public onlyBuyer(msg.sender) {
+        // Check if Tx completed or returned
+        require(!transactions[transactionId].completed, "Transaction already completed");
+        require(!transactions[transactionId].returnApproved, "Cannot complete transaction with approved return");
+
+        // Transfer the total cost to the seller as income and mark this Tx as done
+        _token.transfer(seller, transactions[transactionId].totalCost);
+        transactions[transactionId].completed = true;
+    }
+}
