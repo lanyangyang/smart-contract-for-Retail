@@ -1,7 +1,3 @@
-//------------------------------------------------------------------------------------//
-// This contract was designed by LIU Ziyang as a course project.                      //
-// It is designed for retail condition with assumption that all users are honest.     //
-
 pragma solidity ^0.8.0; // Specify the Solidity compiler version
 
 // Import the IERC20 standard interface from OpenZeppelin library
